@@ -1,0 +1,126 @@
+\chapter{Performance: where the time goes}\label{ch:perf}
+
+\emph{Resume line: ``Benchmarked encoding and decoding performance and profiled computationally intensive stages of the pipeline.''}
+
+\begin{warn}[Read this first]
+The numbers in this chapter were measured in the \emph{sandbox used to prepare this guide} (a 2-core virtual machine, Intel Xeon @ 2.1\,GHz). They are \textbf{not bwUniCluster results}. They illustrate the method and the kinds of findings to look for. For the interview, run the benchmarks on bwUniCluster (Chapter~\ref{ch:cluster}) and quote \emph{those} numbers, with the node type, compiler and flags.
+\end{warn}
+
+\section{How the code measures itself}
+
+\code{encode()} and \code{decode()} take an optional timings struct. Inside, a steady-clock timer wraps each stage (in the order of the pipeline). The benchmark program \code{jlc\_bench}:
+\begin{itemize}
+\item runs one \emph{warm-up} iteration that is thrown away (first-touch page faults, instruction cache, frequency ramp-up),
+\item runs the configuration several times and reports the \textbf{median} of each stage (robust to a noisy neighbour; the mean is not),
+\item reports throughput in megapixels per second, and writes CSV for plotting.
+\end{itemize}
+
+\section{The profile}
+
+Encode and decode of a $2048\times2048$ synthetic image at quality 50 (``staged'' mode, every stage a separate pass over the whole image):
+
+\begin{center}
+\small
+\begin{tabular}{@{}lr@{}}
+\toprule
+\textbf{stage (sandbox, 2048$\times$2048, quality 50)} & \textbf{ms}\\ \midrule
+\inputrows{snippets/sandbox_stages}
+\end{tabular}
+\end{center}
+
+Two things stand out.
+
+\textbf{1. The DCT dominates the encoder} (about 60\% of encode time). That is expected: 1024 multiply-adds per tile and $2048^2/64=65{,}536$ tiles make 67\,million multiply-adds per transform pass. Entropy coding (tokenize + Huffman + bit packing) is much cheaper at quality 50, because most coefficients are zero; at quality 90 it grows, since there are more non-zero values to code.
+
+\textbf{2. The ``dequantize'' stage is as slow as the whole Huffman decoder} (\sbDequantMs\ ms against \sbHuffDecMs\ ms), even though it does almost no arithmetic: one multiply per coefficient. A stage with that little maths should be near-free. This is a smell: the cost is not computation, it is \emph{memory}.
+
+\section{Profile $\to$ hypothesis $\to$ experiment $\to$ fix}
+
+\textbf{Hypothesis.} The staged decoder allocates a full-size array of \code{double} (8 bytes per pixel, 32\,MiB at $2048^2$) for the dequantized coefficients. As I understand glibc, \code{malloc} adapts its \code{mmap} threshold upwards when large blocks are freed, but only up to 32\,MiB; a request of 32\,MiB or more is always served with fresh zeroed pages from the kernel, and the first write to each 4\,KiB page triggers a page fault. The dequantize loop would then pay for 8192 page faults per call. (The experiment below, not this allocator detail, is the evidence.)
+
+\textbf{Experiment.} Run the identical benchmark with \code{malloc} configured to never use \code{mmap} and never give memory back (environment variables \code{MALLOC\_MMAP\_THRESHOLD\_}, \code{MALLOC\_TRIM\_THRESHOLD\_}, \code{MALLOC\_TOP\_PAD\_}). Pages then stay mapped and are reused between iterations. Script: \file{python/page\_fault\_experiment.py}.
+
+\begin{center}
+\small
+\begin{tabular}{@{}lrrr@{}}
+\toprule
+configuration (sandbox, 2048$\times$2048, q 50) & encode [ms] & decode [ms] & dequantize stage [ms]\\ \midrule
+\inputrows{snippets/malloc_experiment}
+\end{tabular}
+\end{center}
+
+\textbf{Result.} With mmap disabled the staged decoder's dequantize stage drops from about 23\,ms to 9\,ms and the whole decode by about 17\,ms, while the fused path does not change at all. The hypothesis is confirmed: roughly 14\,ms of the 23\,ms was the operating system handing out fresh pages, not arithmetic.
+
+\textbf{Fix (in the code).} The \emph{fused} execution strategy: instead of three whole-image passes with two big intermediate arrays, do DCT$\to$quantize (encode) or dequantize$\to$IDCT (decode) tile by tile in a 64-element local buffer that lives in L1 cache. No large allocation, no extra passes over memory. The output is bit-identical to the staged path (test \code{fused\_and\_staged\_paths\_are\_bit\_identical}), and it is selected by a flag, so the staged mode stays available for per-stage profiling.
+
+\begin{center}
+\small
+\begin{tabular}{@{}lrrrrrr@{}}
+\toprule
+& \multicolumn{3}{c}{encode [ms]} & \multicolumn{3}{c}{decode [ms]}\\
+\cmidrule(lr){2-4}\cmidrule(lr){5-7}
+image (q 50) & staged & fused & speed-up & staged & fused & speed-up\\ \midrule
+\inputrows{snippets/sandbox_fused}
+\end{tabular}
+\end{center}
+
+Below $2048^2$ there is no gain here, consistent with allocations smaller than 32\,MiB being recycled by \code{malloc}; from $2048^2$ upwards fusing gives about 1.3--1.4$\times$. \textbf{This size-dependence is specific to glibc and this machine}; on bwUniCluster the threshold or the kernel's page-fault cost may differ, so measure, do not assume.
+
+\begin{sound}
+``Profiling the staged decoder showed a stage that does almost no arithmetic taking as long as Huffman decoding. I hypothesized it was page-fault cost from allocating a 32\,MiB temporary, confirmed it by changing only the allocator behaviour, and then removed the temporary by fusing dequantization and IDCT per tile. The output is bit-identical, verified by a test, and about 1.3$\times$ faster on large images.''
+\end{sound}
+
+\begin{plain}
+\textbf{Why this matters for GPU and library work.} Allocation in a hot path is a classic performance bug: it is why CUDA libraries ask you to pass in a pre-allocated workspace and why \code{cudaMalloc} is never called per frame. The same ``allocate once, reuse'' lesson applies on CPUs.
+\end{plain}
+
+\section{How to profile on the cluster}
+
+\begin{enumerate}
+\item \textbf{Stage timers} (built in): run \file{slurm/02\_bench.sbatch}, plot with \file{python/plot\_bench.py}. This tells you \emph{which stage} is slow.
+\item \textbf{gprof} (always available with GCC): \file{slurm/03\_profile.sbatch} builds with \code{-pg -fno-inline} and produces a function-level table (\file{results/gprof\_flat.txt}). Because inlining is disabled, small helpers show up as separate rows; the \emph{ranking} of the big functions is what you read, not the absolute time.
+\item \textbf{perf} (if installed on the node; check with \code{which perf}): \code{perf stat -e cycles,\allowbreak instructions,\allowbreak cache-misses ./build/jlc\_bench ...} gives instructions per cycle and cache miss counts. If it is not available, say so and rely on the first two methods; do not invent hardware-counter numbers.
+\end{enumerate}
+
+\section{Fill in your cluster results}
+
+\begin{center}
+\small
+\begin{tabular}{@{}p{3.2cm}p{2.3cm}p{2.3cm}p{2.5cm}p{3.4cm}@{}}
+\toprule
+\textbf{partition / CPU} & \textbf{encode [Mpix/s]} & \textbf{decode [Mpix/s]} & \textbf{slowest stage} & \textbf{fused vs staged}\\ \midrule
+\code{cpu\_il}\newline Xeon Platinum 8358 & & & & \\[10pt]
+\code{cpu}\newline AMD EPYC 9454 & & & & \\[10pt]
+\bottomrule
+\end{tabular}
+\end{center}
+(Use the $2048^2$, quality-50 rows of \file{results/bench\_*.csv}; \file{python/plot\_bench.py} writes \file{bench\_summary.md} with every number.)
+
+\section{How I would make it faster (and what to say about each idea)}
+
+\begin{center}
+\small
+\begin{tabular}{@{}p{3.6cm}p{6.2cm}p{4.8cm}@{}}
+\toprule
+\textbf{Idea} & \textbf{Why it helps} & \textbf{Caveat}\\ \midrule
+Fused tile loop (done) & Removes full-image temporaries and page faults. & Hides per-stage timing, so keep staged mode.\\
+Fast DCT algorithm (e.g.\ AAN) & About 5 multiplies + 29 adds per 8-point transform instead of 64 multiply-adds. & Scale factors must be folded into the quantization table; changes rounding slightly, so bit-exactness vs.\ NumPy would be lost.\\
+SIMD across tiles (AVX2) & Do 8 tiles at once: each SIMD lane holds the same coefficient of a different tile. You know this technique from project 1. & Needs a transposed tile layout.\\
+OpenMP over tile rows & DCT, quantization, and the whole decoder after Huffman are independent per tile. Near-linear speed-up until memory bandwidth saturates. & Tokenization has a DC-prediction dependency, and bit packing depends on all previous tiles' lengths.\\
+Table-driven Huffman decode & Look up 8--12 bits at once instead of one bit per loop iteration. The bit-by-bit decoder is the clear next bottleneck at high quality. & Needs a 2-level table for long codes.\\
+Restart intervals & Reset DC prediction and byte-align every $N$ tiles so each segment can be decoded independently. This is how real JPEG decoders parallelize the serial Huffman stage. & Costs a few bits per interval.\\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\section{The GPU connection (relevant to the NVIDIA role)}
+
+JPEG is a textbook case of a pipeline whose stages have different parallel structure:
+
+\begin{itemize}
+\item \textbf{DCT, quantization, dequantization, IDCT: embarrassingly parallel.} Every tile is independent; map tiles to threads or thread-blocks, with the 64 values of a tile in shared memory. This is where a GPU gives a huge speed-up.
+\item \textbf{Huffman decoding is inherently serial.} Where tile $n$ starts in the bit stream depends on the code lengths of tiles $0..n-1$, and codes have variable length, so you cannot jump into the middle. Approaches: restart intervals (independent segments, a property of the \emph{file}), or parallel schemes that decode speculatively from several bit offsets and then synchronize (an active research topic). As far as I know, NVIDIA's \code{nvJPEG} library therefore offers several backends that split the work differently between CPU and GPU (and a dedicated hardware engine on some data-centre GPUs); check its documentation for the current list before quoting details.
+\item \textbf{Memory behaviour dominates.} Tile-by-tile fused kernels, coalesced loads, and pre-allocated workspaces are the GPU analogue of what the fused path does on the CPU.
+\end{itemize}
+
+This is a good thing to discuss: it shows you understand \emph{why} one pipeline stage is the bottleneck for parallelization, not just how to code it.

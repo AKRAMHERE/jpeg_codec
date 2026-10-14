@@ -1,0 +1,55 @@
+\chapter{Running everything on your own machine}\label{ch:running}
+
+You need a C++17 compiler (GCC or Clang), \code{make}, and, for the analysis scripts, Python 3 with NumPy, Pillow, matplotlib and scikit-image (\code{pip install numpy pillow matplotlib scikit-image}). Test images are generated locally, no download needed.
+
+\section{Build and test (2 minutes)}
+
+\begin{lstlisting}[style=shell]
+cd jpeg_codec
+make                      # builds build/libjlc.a, build/jlc, build/jlc_bench, build/jlc_tests
+make test                 # 28 test groups, 32,581 checks, must end with "0 failures"
+python3 python/make_test_images.py     # writes data/*.pgm (cameraman, astronaut, noise, ...)
+\end{lstlisting}
+
+\section{Use the codec}
+
+\begin{lstlisting}[style=shell]
+./build/jlc encode data/camera.pgm out.jlc -q 50     # compress
+./build/jlc decode out.jlc out.pgm                    # decompress
+./build/jlc eval   data/camera.pgm -q 50              # round trip, prints bytes, bpp, ratio, MSE, PSNR
+./build/jlc sweep  data/camera.pgm                    # CSV over many qualities
+python3 python/make_test_images.py --convert myphoto.png myphoto.pgm   # use your own picture
+\end{lstlisting}
+
+\section{Reproduce every result in this guide}
+
+\begin{lstlisting}[style=shell]
+python3 python/crosscheck.py            # C++ vs NumPy: expect "0 mismatches"
+python3 python/rd_sweep.py              # rate-distortion curves + libjpeg comparison -> results/
+python3 python/numerics_study.py        # rounding / range / precision study -> results/numerics.md
+python3 python/page_fault_experiment.py # the malloc / page-fault experiment (Chapter 11)
+./build/jlc_bench --sizes 512,1024,2048 --quality 10,50,90 --reps 7 --csv results/bench_local.csv
+python3 python/plot_bench.py results/bench_local.csv
+\end{lstlisting}
+
+\section{Rebuild this PDF}
+
+\begin{lstlisting}[style=shell]
+python3 python/make_figures.py && python3 python/extract_code.py   # regenerate figures, numbers, code excerpts
+cd docs && pdflatex guide.tex && pdflatex guide.tex                # twice, for the table of contents
+\end{lstlisting}
+
+\section{Exercises that make the project yours}
+
+Predict the result \emph{before} you run each change; being able to predict is what interviewers probe.
+
+\begin{enumerate}
+\item \textbf{Replace the zig-zag with a plain row-by-row scan.} Predict the change in file size at quality 50. (Expect larger files: the zeros no longer bunch up, so there are more and shorter runs. Measured with the NumPy model on the cameraman: $+9.1\%$, 22\,997 instead of 21\,079 bytes.)
+\item \textbf{Send the raw DC value instead of the difference to the previous tile.} Predict the direction and rough size from Figure~\ref{fig:dc} (entropy 6.0 vs 4.1 bits per tile). Measured: $+6.3\%$, i.e.\ 2.6 extra bits per tile. It is not exactly the 1.9-bit entropy gap, partly because the codec Huffman-codes only the category and sends the amplitude bits raw.
+\item \textbf{Set the tie epsilon to 0 and run \file{crosscheck.py}.} Predict which qualities mismatch. (Mostly the high ones; Chapter~\ref{ch:numerics}.)
+\item \textbf{Use \code{float} instead of \code{double} in the DCT.} Predict whether the output changes at quality 50 (rarely, only on ties) and at quality 100.
+\item \textbf{Change tile size to 16$\times$16.} (Needs a new DCT matrix and zig-zag.) Predict the effect on compression ratio and on blocking artifacts.
+\item \textbf{Parallelize \code{analyze()} with \code{\#pragma omp parallel for} over tile rows.} Verify the output is unchanged, then measure speed-up on 1, 2, 4, 8 cores on the cluster.
+\item \textbf{Implement a 10-bit lookup table for Huffman decoding.} Verify the output is unchanged, measure the decode speed-up at quality 90.
+\item \textbf{Add colour:} convert RGB to YCbCr, code Y as now, subsample Cb/Cr by 2 in each direction, and use a separate (coarser) quantization table for chroma.
+\end{enumerate}

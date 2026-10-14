@@ -1,0 +1,54 @@
+\chapter{Glossary and cheat sheet}
+
+\section{Terms in plain words}
+
+\begin{description}[leftmargin=3.4cm,style=nextline,font=\bfseries]
+\item[AC coefficient] Any DCT output other than the first: how much of a particular wiggly pattern is present.
+\item[Amplitude bits] The raw bits after a Huffman code that say which value inside a category it is.
+\item[bpp] Bits per pixel of the compressed file.
+\item[Canonical Huffman] A Huffman code whose bit patterns are assigned by a fixed rule from the code lengths, so only the lengths need be stored.
+\item[Category / size] Number of bits needed for the magnitude of a value.
+\item[Coefficient] One of the 64 numbers a tile is turned into by the DCT.
+\item[DC coefficient] The first DCT output: 8$\times$ the tile's average brightness.
+\item[DCT] Discrete Cosine Transform: re-expresses a tile as a weighted sum of 64 cosine patterns.
+\item[DPCM] Sending differences to a prediction (here: previous tile's DC).
+\item[EOB] End of block: ``all remaining coefficients are zero''.
+\item[Entropy] The theoretical minimum average bits per symbol for a given distribution.
+\item[Fused / staged] Two ways to run the same stages: per tile in a tiny buffer, or as full-image passes with big intermediates.
+\item[Kraft inequality] $\sum2^{-\ell_i}\le1$ for any prefix-free code; equality means no wasted codewords.
+\item[Level shift] Subtracting 128 so pixels are centred on zero.
+\item[Lossy / lossless] Whether the original can be recovered exactly.
+\item[MSE / PSNR] Average squared error / its logarithmic form in dB.
+\item[Orthonormal] A transform that preserves lengths and angles; inverse = transpose.
+\item[Parseval] Orthonormal transforms preserve the sum of squares.
+\item[Prefix-free] No code is the beginning of another.
+\item[Quality] The 1--100 slider that scales the quantization table.
+\item[Quantization] Dividing by a step and rounding: the lossy step.
+\item[Rate--distortion] The trade-off between file size and error.
+\item[Run-length coding] Describing zeros by how many there are.
+\item[Slurm] The job scheduler on bwUniCluster.
+\item[Tile / block] An $8\times8$ group of pixels.
+\item[ZRL] Zero run length: ``16 zeros'', used when a run exceeds 15.
+\item[Zig-zag] Diagonal scan order from low to high frequency.
+\end{description}
+
+\section{Command cheat sheet}
+
+\begin{lstlisting}[style=shell]
+# local
+make && make test                               # build, 28 groups / 32,581 checks
+python3 python/make_test_images.py              # data/*.pgm
+./build/jlc eval data/camera.pgm -q 50          # one round trip with metrics
+python3 python/crosscheck.py                    # C++ vs NumPy, expect 0 mismatches
+python3 python/rd_sweep.py                      # rate-distortion
+python3 python/numerics_study.py                # numerics
+./build/jlc_bench --sizes 512,1024,2048 --quality 10,50,90 --reps 7 --fused 0
+# cluster (from the project directory on uc3.scc.kit.edu)
+mkdir -p logs results data
+sbatch slurm/01_build_test.sbatch               # dev_cpu: build + tests
+bash slurm/submit_all.sh                        # benchmarks on cpu_il and cpu
+sbatch slurm/03_profile.sbatch                  # gprof
+squeue --me                                     # status; at most every 30 s
+scontrol show job <id>                          # why pending / failed
+scancel <id>                                    # cancel
+\end{lstlisting}

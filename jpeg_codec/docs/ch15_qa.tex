@@ -1,0 +1,115 @@
+\chapter{Questions you should expect, with answers}\label{ch:qa}
+
+These answers are written to be \emph{spoken}: short, structured, with the numbers you will actually have. Do not memorize them word for word. Read the question, answer aloud in your own words, then compare. Every answer here is consistent with what the code does; if you change the code, change the answer.
+
+\newcommand{\QA}[2]{\par\medskip\noindent\textbf{#1}\par\noindent #2\par}
+
+\section{The project}
+
+\QA{1. Walk me through the project in one minute.}{
+``I built a JPEG-style codec for grayscale images in C++ with a NumPy reference model. The encoder cuts the image into $8\times8$ tiles, subtracts 128, applies an orthonormal DCT, divides by a quality-scaled quantization table and rounds, which is the only lossy step. Then it reorders each tile in zig-zag, codes the DC as a difference to the previous tile, run-length codes the AC values as (run, size) symbols, and Huffman-codes those with per-image canonical tables. The decoder inverts that. I validated it with unit tests, a byte-identical Python model and a comparison with libjpeg (same PSNR at equal quality), measured rate--distortion, studied the numerical error sources, and profiled the stages on bwUniCluster.''}
+
+\QA{2. Why the DCT, and not simply quantizing the pixels?}{
+Quantizing pixels directly throws away information everywhere equally and gives no structure to exploit. The DCT is an orthonormal change of basis that concentrates the energy of a smooth tile into a few low-frequency coefficients; the rest are near zero. Quantization then removes small coefficients almost for free, and the zeros are cheap to code. It is orthonormal, so the inverse is the transpose and squared error is preserved, which keeps distortion easy to reason about.}
+
+\QA{3. Why the DCT rather than the Fourier transform?}{
+Real output rather than complex, and better behaviour at tile borders. The DFT assumes the tile repeats periodically, which creates an artificial jump between the right and left edge; the DCT effectively mirrors the tile, so there is no jump and the energy stays in fewer coefficients.}
+
+\QA{4. Why $8\times8$ tiles?}{
+A compromise. Larger tiles capture more correlation and compress smoother areas better, but cost more arithmetic, blur edges across a bigger area, and need more memory; smaller tiles are cheaper but exploit less redundancy and make blocking more visible. 8 is JPEG's historic choice; modern codecs use variable sizes up to 64 or more, chosen per region.}
+
+\QA{5. Where exactly is information lost?}{
+Quantization. After that everything is reversible: zig-zag, run-length and Huffman coding are exactly invertible, and my test proves the decoded coefficients equal the encoder's bit for bit. The decoder adds two tiny effects: rounding to integer pixels and clamping to $[0,255]$.}
+
+\QA{6. Why zig-zag?}{
+It orders coefficients from low to high frequency. High-frequency coefficients are mostly zero after quantization, so the zeros form one long run at the end that a single end-of-block symbol replaces. A row-by-row scan interleaves zeros and non-zeros. On the cameraman, replacing zig-zag with row-major order made the file 9.1\% larger.}
+
+\QA{7. Why code the DC coefficient as a difference?}{
+Neighbouring tiles have similar average brightness, so the difference is concentrated near zero and needs a shorter code. Entropy dropped from 6.0 to 4.1 bits per tile; sending raw DC values made the file 6.3\% larger in my experiment.}
+
+\QA{8. Explain Huffman coding. What is a canonical code and why use one?}{
+Count symbol frequencies, repeatedly merge the two rarest into a parent, and read the code off the tree path; frequent symbols get short codes, and the code is prefix-free so it decodes unambiguously. Average length is within one bit of the entropy. A canonical code assigns the actual bit patterns by a fixed rule from the lengths alone (sort by length then symbol, increment, shift when the length grows), so the file stores only code lengths, and decoding becomes a small range check per length.}
+
+\QA{9. Huffman is not optimal in general. What is better?}{
+Huffman must spend a whole number of bits per symbol, so it loses when a symbol has probability close to 1 (it cannot spend 0.1 bit). Arithmetic and range coding approach the entropy exactly; the JPEG standard defines an arithmetic-coded variant, rarely used for historic patent reasons and slower speed. For this project Huffman matches the standard baseline.}
+
+\QA{10. What does the quality parameter mean?}{
+It scales the quantization table. Quality 50 uses the standard table, lower quality multiplies the steps (quality 10: $5\times$), higher quality shrinks them (quality 100: all steps 1). The rule is libjpeg's, so quality numbers are comparable with libjpeg's.}
+
+\section{Measurement and numerics}
+
+\QA{11. What are PSNR and MSE, and what are their limits?}{
+MSE is the average squared pixel error; PSNR $=10\log_{10}(255^2/{\rm MSE})$ in dB. Every $+6$\,dB halves the typical error. Limit: it measures pixel distance, not perception; blur and blocking with equal MSE look different. That is why perceptual metrics such as SSIM exist. I used PSNR because it connects directly to quantization noise and I could validate it against libjpeg.}
+
+\QA{12. What did the rate--distortion curves show?}{
+Diminishing returns: going from quality 50 to 75 on the cameraman costs $1.6\times$ the bytes for 2.5\,dB, while 95 to 100 costs $1.8\times$ for 14\,dB nobody can see. Content matters enormously: a smooth gradient compresses beyond 58:1 at quality 50, the cameraman 12:1, and white noise only 2.4:1 at 22.7\,dB, and it \emph{expands} at quality 100.}
+
+\QA{13. How did you validate against libjpeg, and what does the comparison prove?}{
+Same images, same quality values, optimized Huffman tables via Pillow. PSNR agrees to 0.01\,dB at quality 50 on all six images, which shows my DCT, tables, scaling and rounding match the standard, since distortion depends only on those. File size is within about 1\% on natural images, which shows the entropy coder is competitive. It does not prove my files are valid JPEG: they are not (own container).}
+
+\QA{14. What was the most interesting bug or finding?}{
+Cross-checking against NumPy: 13 of 16\,384 coefficients differed. All were within $10^{-14}$ of an exact $x.5$. At four DCT positions the coefficients are exact multiples of $1/8$, so ties are common at high quality, and the rounding direction was decided by floating-point summation order. I added a deterministic tie-break ($+10^{-9}$ before the floor, justified by the noise level and the minimum step), and the two implementations became byte-identical. General lesson: when ``the same algorithm'' runs on different platforms, discrete decisions can flip in the last bit.}
+
+\QA{15. Is double precision needed? What about float or fixed point?}{
+Not for accuracy. Forward plus inverse in float32 errs by $10^{-4}$ against the 0.5 threshold for flipping a pixel. For fixed-point constants about 10 bits keep the worst case under half a grey level and 13 bits get to 0.05; I only modelled the constants, not intermediate rounding. Double is used for simplicity and reproducibility.}
+
+\QA{16. Why is quality 100 not lossless?}{
+Step size 1 still rounds every coefficient to an integer (error up to 0.5, variance $1/12$). Orthonormality carries that to the pixels; the final rounding hides it unless $|e|>0.5$, which happens for about 8.3\% of pixels. I predicted MSE 0.0833 and measured 0.0834 on the cameraman.}
+
+\QA{17. The tile size is not a divisor of the image size. What do you do?}{
+Replicate the last row and column up to a multiple of 8 (a zero pad would create a fake sharp edge that costs bits), store the true size in the header, and crop after decoding. Tests cover $1\times1$, $7\times9$, $17\times13$ and others.}
+
+\section{Performance and parallelism}
+
+\QA{18. Which stage dominates, and how do you know?}{
+\textit{(Use your cluster numbers.)} ``On the [node type] the DCT accounts for about [X]\% of encode time and Huffman decoding [Y]\% of decode time at quality 90. I know this from per-stage steady-clock timers, taking the median of repeated runs after a warm-up, and from a gprof profile that ranks the same functions.''}
+
+\QA{19. What optimization did you do, and how did you verify it?}{
+In the staged decoder, the dequantize stage did almost no arithmetic but cost as much as Huffman decoding. I hypothesized page faults on a fresh 32\,MiB buffer, tested it by changing only the allocator behaviour, then fused dequantization and IDCT per tile to remove the buffer. The fast path is selected by a flag and a test requires it to be bit-identical to the staged path. Gain: about $1.3\times$ on large images in my sandbox [and your cluster number].}
+
+\QA{20. How would you parallelize the codec?}{
+DCT, quantization, dequantization and IDCT are independent per tile: OpenMP over tile rows, or SIMD across tiles (AVX2: 8 tiles at once, one coefficient per lane). Entropy coding is the hard part: DC prediction links consecutive tiles, and the bit position of each tile depends on the lengths of all previous ones. The standard answer is restart intervals, which reset DC prediction and align to a byte boundary every $N$ tiles so the segments can be coded and decoded independently, at a cost of a few bits per interval.}
+
+\QA{21. How would this look on a GPU?}{
+One thread-block per tile or per group of tiles, the 64 values in shared memory, row transform then column transform with coalesced loads, fused with quantization so intermediate data never goes to global memory. Huffman decoding is the serial bottleneck; the options are restart markers, speculative parallel decoding that synchronizes, or leaving that stage on the CPU and overlapping it with GPU work. As far as I know this split is what GPU JPEG libraries such as nvJPEG expose as different backends; I would check its documentation for details rather than quote them from memory.}
+
+\QA{22. Your Huffman decoder reads one bit per iteration. How would you speed it up?}{
+Peek at the next 8--12 bits and index a lookup table that returns the symbol and its length, with a second-level table for the rare longer codes; refill a 64-bit buffer a byte or word at a time instead of fetching bits individually.}
+
+\QA{23. What is the complexity of your DCT, and can it be faster?}{
+Separable matrix form: $2\cdot8^3=1024$ multiply-adds per tile, versus 4096 for the direct double sum. Fast algorithms such as AAN need about 5 multiplications and 29 additions per 8-point transform (about 16 transforms per tile), with scaling folded into the quantization table. I did not use them because they change the rounding behaviour slightly, and I wanted bit-exact comparability with the NumPy model.}
+
+\QA{24. How do you make a benchmark trustworthy?}{
+Discard a warm-up run, repeat, report the median, pin to a core, use identical binary and inputs across machines, record CPU model, compiler and flags, and be explicit that the node may be shared (use exclusive nodes or repeat on different occasions). Report throughput (Mpixel/s) as well as time so image sizes are comparable.}
+
+\section{Scope, honesty and what next}
+
+\QA{25. How does this differ from real JPEG?}{
+Grayscale only (no YCbCr conversion, no chroma subsampling); our own container instead of JFIF markers; one Huffman table pair per image rather than the standard tables or per-scan tables; no byte stuffing, restart markers, progressive mode or EXIF handling. The core algorithm stages and quality scaling are the baseline JPEG ones, which is why PSNR matches libjpeg.}
+
+\QA{26. How would you add colour?}{
+Convert RGB to YCbCr, code Y as now, downsample Cb and Cr by two in each direction (the eye is less sensitive to colour detail), give chroma its own quantization and Huffman tables, and interleave the tiles. The DC prediction runs per component.}
+
+\QA{27. What causes blocking artifacts, and how are they reduced?}{
+Tiles are quantized independently, so at low quality neighbouring tiles disagree at their borders. Mitigations: deblocking filters after decoding, overlapped/lapped transforms, larger or adaptive transforms, or wavelet codecs (JPEG~2000) that have no tile borders in the same sense.}
+
+\QA{28. What would you do next with another week?}{
+Table-driven Huffman decode and restart intervals (to parallelize decoding), SIMD DCT across tiles, then an OpenMP strong-scaling study on one node; a perceptual metric (SSIM); and colour support. I would keep the staged and fused paths and the tie-break so that every optimization can be tested against the NumPy reference.}
+
+\section{Beyond the project (an exploratory call)}
+
+The call is described as \emph{exploratory}, so expect conversation about you as well. Use true facts from your own history and connect them to this project:
+
+\begin{itemize}
+\item \textbf{Bosch (two years):} you built Python pipelines to evaluate large measurement and simulation datasets, analyzed deviations between expected and measured behaviour, and built regression and comparison workflows. That is exactly the habit behind the reference model and cross-check: ``I do not trust a result until an independent path reproduces it.''
+\item \textbf{Embedded and HW/SW background:} fixed-point arithmetic, memory behaviour, and performance profiling are things you did before this M.Sc., so ``numerical accuracy versus speed'' is familiar ground.
+\item \textbf{Project 1 and project 2 together:} one was about making kernels fast (AVX2, OpenMP, cache-aware access); this one is about correctness, numerics and a full pipeline whose stages have different parallel structure. Together they cover the tension a library engineer lives with.
+\end{itemize}
+
+\textbf{Questions you could ask them} (choose two or three that fit the conversation; do not assume details about their team):
+\begin{itemize}
+\item What would a typical intern project look like in this team, and how is it validated against a reference?
+\item How do you decide between bit-exact and tolerance-based equivalence between CPU and GPU code paths?
+\item How are performance regressions detected and tracked over releases?
+\item Which of the image or data-processing components has the toughest trade-off between throughput and memory use right now?
+\end{itemize}

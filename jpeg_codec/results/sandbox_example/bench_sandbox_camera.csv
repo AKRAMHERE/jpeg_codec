@@ -1,0 +1,4 @@
+image,width,height,quality,bytes,bpp,psnr,enc_total_ms,enc_dct_ms,enc_quant_zigzag_ms,enc_scan_ms,enc_huff_build_ms,enc_bitpack_ms,dec_total_ms,dec_bitdecode_ms,dec_dequant_ms,dec_idct_ms,dec_crop_ms,enc_mpix_s,dec_mpix_s
+data/camera.pgm,512,512,10,5750,0.17548,28.427,2.9098,1.5507,0.8446,0.3574,0.0147,0.1383,2.0885,0.3592,0.2994,1.3778,0.0202,90.091,125.516
+data/camera.pgm,512,512,50,21079,0.64328,32.599,3.6001,1.5508,0.9030,0.6818,0.0196,0.3757,2.9810,1.2442,0.2795,1.3720,0.0194,72.816,87.938
+data/camera.pgm,512,512,90,58523,1.78598,40.339,4.7866,1.5756,0.8356,1.3966,0.0239,0.9744,5.0827,3.3386,0.3055,1.3979,0.0202,54.766,51.575

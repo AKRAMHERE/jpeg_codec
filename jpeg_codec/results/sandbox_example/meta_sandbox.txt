@@ -1,0 +1,13 @@
+date:       2026-10-07T11:22:55+02:00
+host:       vm
+partition:  sandbox
+job id:     none
+compiler:   g++ (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0
+binary dir: build
+Model name:                              Intel(R) Xeon(R) Processor @ 2.10GHz
+Thread(s) per core:                      1
+Core(s) per socket:                      2
+Socket(s):                               1
+L1d cache:                               96 KiB (2 instances)
+L2 cache:                                4 MiB (2 instances)
+L3 cache:                                260 MiB (1 instance)

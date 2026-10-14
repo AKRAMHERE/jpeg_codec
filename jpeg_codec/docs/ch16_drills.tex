@@ -1,0 +1,65 @@
+\chapter{Drills: do these without the guide}\label{ch:drills}
+
+Do each drill on paper first. The worked answers are at the end of each drill; they were computed by the same code as the project.
+
+\section{Hand calculations}
+
+\begin{enumerate}[label=\textbf{D\arabic*.},leftmargin=1.2cm]
+\item \textbf{DC of a flat row.} All 8 samples of a row equal 10. What is the 1D DCT output $X_0$? And what is $X_1$?
+\item \textbf{Category and amplitude bits.} Give size and amplitude bits for $5,\;-5,\;12,\;-12,\;-1,\;0$.
+\item \textbf{Tokenize.} Previous block's DC was 10. Current block in zig-zag order: $[12,0,0,3,0,0,0,-1,0,\dots,0]$.\ List the tokens (symbol in hex, amplitude bits).
+\item \textbf{Huffman by hand.} Frequencies A:5, B:2, C:1, D:1. Build the code with the project's tie-break (equal frequency: smaller smallest-symbol first). Lengths, canonical codes, total bits, and bits for a fixed 2-bit code.
+\item \textbf{Decode.} With the code from D4, decode \texttt{010110011110}.
+\item \textbf{PSNR.} MSE $=25$ and MSE $=100$: PSNR? What happens to PSNR if the RMS error doubles?
+\item \textbf{Bits per pixel.} A $512\times512$ image at 0.64 bpp: how many bytes?
+\item \textbf{Quality table.} At quality 25, what are the scale $s$ and the quantization steps for the base entries 16 and 99?
+\item \textbf{Quantize and reconstruct.} Coefficient $-37.2$, step 16: quantized value, reconstructed value, error, and why the error cannot exceed 8.
+\item \textbf{Zig-zag.} At which zig-zag position is the coefficient in row 1, column 2? Which (row, column) is at position 12?
+\end{enumerate}
+
+\section{Answers}
+
+\begin{enumerate}[label=\textbf{D\arabic*.},leftmargin=1.2cm]
+\item $X_0=\tfrac{1}{\sqrt8}\cdot 8\cdot10=10\sqrt8\approx28.28$. $X_1=0$ (positive and negative halves of the cosine cancel). In 2D a flat tile of value $a$ has DC $=8a$.
+\item $5$: size 3, \texttt{101}. $-5$: size 3, $-5+7=2$, \texttt{010}. $12$: size 4, \texttt{1100}. $-12$: size 4, $-12+15=3$, \texttt{0011}. $-1$: size 1, \texttt{0}. $0$: size 0, no bits.
+\item DC difference $12-10=2$: category 2, symbol \texttt{0x02}, amplitude \texttt{10}. The first non-zero AC is $3$ at position 3 with two zeros before it: run 2, size 2, symbol \texttt{0x22}, amplitude \texttt{11}. Next $-1$ at position 7 with three zeros before it: run 3, size 1, symbol \texttt{0x31}, amplitude \texttt{0}. All remaining are zero: EOB \texttt{0x00}.
+\item Merge C+D$=2$; now B(2, smallest symbol 1) and CD(2, smallest symbol 2) are tied, so B goes first: merge B+CD$=4$; then A+4$=9$. Lengths A=1, B=2, C=3, D=3. Canonical codes: A=\texttt{0}, B=\texttt{10}, C=\texttt{110}, D=\texttt{111}. Total bits $5\cdot1+2\cdot2+1\cdot3+1\cdot3=15$ versus $9\cdot2=18$ for a fixed 2-bit code.
+\item \texttt{0}$|$\texttt{10}$|$\texttt{110}$|$\texttt{0}$|$\texttt{111}$|$\texttt{10} $\Rightarrow$ A B C A D B.
+\item $10\log_{10}(65025/25)=34.15$\,dB; $10\log_{10}(65025/100)=28.13$\,dB. Doubling the RMS error quadruples MSE: $-6.02$\,dB.
+\item $0.64\cdot262144/8=20{,}972$ bytes (the cameraman at quality 50 is 21\,079).
+\item $s=\lfloor5000/25\rfloor=200$. Entry 16: $\lfloor(16\cdot200+50)/100\rfloor=32$. Entry 99: $\lfloor(99\cdot200+50)/100\rfloor=198$.
+\item $\lfloor-37.2/16+0.5\rfloor=\lfloor-1.825\rfloor=-2$; reconstructed $-2\cdot16=-32$; error $5.2$. Rounding to the nearest multiple of the step can never be off by more than half a step (8).
+\item Row 1, column 2 is natural index $1\cdot8+2=10$, which is at zig-zag position 7. Position 12 holds natural index 18, i.e.\ row 2, column 2.
+\end{enumerate}
+
+\section{Explain aloud (2 minutes each, no notes)}
+
+\begin{enumerate}
+\item The pipeline from pixels to bytes and back, naming the one lossy step.
+\item Why the inverse DCT is the transpose, and what Parseval buys you.
+\item Why $\pm$ amplitude bits use the complement convention and how the decoder tells the sign.
+\item Canonical Huffman: how the decoder rebuilds codes from lengths.
+\item The rounding-tie bug from discovery to fix.
+\item The profile, the hypothesis, the experiment, and the fix.
+\item What you would parallelize on a GPU, and what you would not.
+\end{enumerate}
+
+\section{An eight-day plan}
+
+Today is Wednesday 7 October; the interview is Thursday 15 October, 11:00--12:00 CEST on Teams.
+
+\begin{center}
+\small
+\begin{tabular}{@{}p{3.1cm}p{11.4cm}@{}}
+\toprule
+\textbf{Wed 7 Oct} & Build and test locally (Chapter~\ref{ch:running}); run the Python scripts; read Chapters 1--3 with the code open.\\
+\textbf{Thu 8 Oct} & Chapters 4--7. Exercises 1--3 of Chapter~\ref{ch:running}: predict, then run.\\
+\textbf{Fri 9 Oct} & Log in to bwUniCluster (VPN if needed), copy the project, run \file{01\_build\_test}, then \emph{submit the benchmark jobs early}: queue waits vary. \textbf{Reply to the recruiter to confirm the interview slot} if you have not yet: the e-mail asks for it.\\
+\textbf{Sat 10 Oct} & Collect results, plot, fill in the table in Chapter~\ref{ch:perf}. Read Chapters 8--11. Do one optimization exercise (OpenMP or Huffman lookup table) and verify the output is unchanged.\\
+\textbf{Sun 11 Oct} & Chapters 14--15 aloud; record yourself on questions 1, 5, 14, 19, 20, 21. Listen back.\\
+\textbf{Mon 12 Oct} & Drills D1--D10 and the seven ``explain aloud'' items without notes.\\
+\textbf{Tue 13 Oct} & Mock interview with a classmate for 45 minutes; give them the question list but not the answers. Fix the weak spots.\\
+\textbf{Wed 14 Oct} & Light review only. Re-run \code{make test} so you know the project works. Check the Teams link, camera, microphone, a quiet room. Prepare two questions for them.\\
+\textbf{Thu 15 Oct} & Join at 11:00. If the interviewer has not joined after 10 minutes, e-mail the recruiter, as the invitation says. No outside tools during the call.\\ \bottomrule
+\end{tabular}
+\end{center}

@@ -1,0 +1,56 @@
+\chapter{Quantization: the one place information is lost}\label{ch:quant}
+
+\section{The intuition}
+
+Imagine you must report prices. Writing ``\texteuro 3.47'' costs more characters than ``\texteuro 3.50'', which costs more than ``about \texteuro 5''. \emph{Quantization} is deliberately reporting numbers at a coarser precision. You choose a step size $Q$ and report only how many steps fit: $q=\operatorname{round}(Y/Q)$. The decoder multiplies back, $\hat Y = q\cdot Q$, and the difference is the \textbf{quantization error}, at most $Q/2$.
+
+Two things make this a good deal:
+\begin{itemize}
+\item \textbf{We choose a different step for every one of the 64 positions.} The eye is much less sensitive to errors in fine detail than in broad shading, so high-frequency positions get large steps (coarse rounding, lots of zeros) and low-frequency positions get small steps.
+\item \textbf{After the DCT most coefficients are small}, so with a big step they round to exactly 0. A zero costs almost nothing to store (Chapters~\ref{ch:zigzag}--\ref{ch:huffman}).
+\end{itemize}
+
+\section{The step-size table}
+
+The codec uses the standard JPEG luminance table (``quality 50''). Note the steps grow towards the bottom-right, where the fine patterns live:
+\[
+Q_{50}=\input{snippets/ex_qtable}
+\]
+
+\section{Turning the ``quality'' knob}
+
+Users want one slider from 1 to 100, not 64 numbers. The rule (borrowed from libjpeg) scales the whole table:
+\begin{equation}
+s=\begin{cases}\lfloor 5000/{\rm quality}\rfloor & {\rm quality}<50\\ 200-2\cdot{\rm quality} & {\rm quality}\ge 50\end{cases}
+\qquad
+Q_i=\operatorname{clamp}\!\Big(\Big\lfloor\tfrac{Q^{\rm base}_i\cdot s+50}{100}\Big\rfloor,\,1,\,255\Big).
+\end{equation}
+\begin{itemize}
+\item Quality 50: $s=100$, so $Q=Q^{\rm base}$ (unchanged).
+\item Quality 100: $s=0$, every entry clamps to 1, the finest possible rounding.
+\item Quality 10: $s=500$, every step is 5$\times$ larger, almost everything becomes zero.
+\item The ``$+50$'' inside the floor implements rounding to the nearest integer using only integer arithmetic.
+\end{itemize}
+\lstinputlisting{snippets/code_quant_table.cpp}
+
+\section{Where exactly is the loss?}
+
+Only here, plus two tiny effects at the very end of decoding: rounding the reconstructed numbers to whole pixel values, and clamping them into $[0,255]$. Everything else (DCT, zig-zag, run-length, Huffman) is exactly reversible. The test \code{entropy\_stage\_is\_exactly\_lossless} proves that last claim: after any quantization, the decoded coefficient array equals the encoder's array bit for bit.
+
+For our example tile at quality~50, quantization divides each coefficient by the table entry above and rounds:
+\[
+\input{snippets/ex_quant}
+\]
+Out of 64 numbers, almost everything is now exactly zero. This is the whole trick. (On the full cameraman at quality 50, \camZeroShareAC\,\% of all AC coefficients are zero, and on average a tile keeps only \camNonzeroPerBlock\ non-zero values out of 64.)
+
+\section{Rounding ties and a subtle bug I found}
+
+``Round to nearest'' has an ambiguity at exactly $x.5$. We use round-half-up, $\lfloor x+0.5\rfloor$. But in floating point, a value that is mathematically exactly $0.5$ can come out as $0.49999999999999956$ in one program and $0.50000000000000089$ in another, depending on the order in which the 64 products are added. NumPy and the C++ loop add in different orders, so they disagreed on a handful of coefficients, and the two files were not byte-identical.
+
+The fix is a deterministic tie-break: add a tiny $\varepsilon=10^{-9}$ before flooring.
+\lstinputlisting{snippets/code_quant_round.cpp}
+Chapter~\ref{ch:numerics} explains why $10^{-9}$ is safe and shows how common near-ties are.
+
+\begin{sound}
+``Quantization is the only lossy operation: divide each DCT coefficient by a per-frequency step from the standard luminance table, scaled by the quality slider with libjpeg's rule, and round. During cross-validation against a NumPy model I found that exact rounding ties were broken differently because of floating-point summation order, and I fixed it with an explicit deterministic tie-break so both implementations produce byte-identical files.''
+\end{sound}

@@ -1,0 +1,101 @@
+\chapter{Rounding, ranges and numerical error}\label{ch:numerics}
+
+This chapter backs the resume line \emph{``Investigated rounding, coefficient range, and numerical reconstruction errors introduced during compression''}. Each section asks a question, predicts the answer with a short calculation, and checks the prediction with an experiment (\file{python/numerics\_study.py}, \file{tests/test\_main.cpp}).
+
+\section{How big can a coefficient get?}
+
+\textbf{Prediction.} After the level shift, pixels lie in $[-128,127]$, so the length of a tile as a vector of 64 numbers is at most $\sqrt{64\cdot128^2}=1024$. The DCT is orthonormal, so it preserves length (Parseval, Chapter~\ref{ch:dct}), and \emph{every} single coefficient is at most as large as the length of the whole vector:
+\[
+|Y_{uv}|\;\le\;\|Y\|_2=\|X\|_2\;\le\;1024 .
+\]
+\textbf{Consequences.} Quantized values fit in a 16-bit integer (we store \code{int16\_t}); a DC \emph{difference} is at most $2\cdot1024=2048$, which has category 12; an AC value is at most 1024, category 11. The size field of a symbol has 4 bits (max 15), so it can never overflow. The test \code{coefficient\_range\_is\_within\_theory} checks the 1024 bound on random data, and in practice the black-tile extreme is reached exactly (the astronaut image contains a coefficient of $-1024.0$).
+
+\begin{center}
+\small
+\begin{tabular}{@{}lrrrr@{}}
+\toprule
+image & DC min & DC max & max $|$AC$|$ & AC category\\ \midrule
+cameraman & $-996$ & $931$ & 669 & 10\\
+astronaut & $-1024$ & $1010$ & 829 & 10\\
+noise & $-218$ & $270$ & 358 & 9\\ \bottomrule
+\end{tabular}
+\end{center}
+
+\section{Where does the reconstruction error come from, and how big is it?}
+
+\textbf{Model.} Quantizing a coefficient with step $Q$ makes an error that is roughly uniformly distributed in $[-Q/2,Q/2]$, with variance $Q^2/12$. By Parseval, errors in coefficients carry over unchanged to pixel errors, so the expected pixel MSE is the average of $Q_i^2/12$ over the 64 positions.
+
+\textbf{Experiment.}
+\begin{center}
+\small
+\begin{tabular}{@{}lrrrr@{}}
+\toprule
+image & quality & measured MSE & model MSE & model / measured\\ \midrule
+\inputrows{snippets/model_vs_measured}
+\end{tabular}
+\end{center}
+
+\textbf{Reading.} For white noise (every coefficient is large compared with $Q$) the model is close at every quality. For the real photograph it badly \emph{over}-estimates at low quality (40$\times$ at quality 10). Why? The model assumes the coefficient is much larger than the step. But most high-frequency coefficients of a photograph are tiny; when $|Y|<Q/2$ the quantized value is 0 and the error is just $|Y|$, which is far smaller than $Q/2$. The model becomes exact as $Q\to1$ (ratio 1.0 at quality 100). In other words: \emph{the model is a worst-case-style bound, and the ``dead zone'' of coefficients quantized to zero is precisely what gives lossy compression its savings at a small cost.}
+
+\section{Quality 100: pure rounding error}
+
+With every $Q=1$, each coefficient is off by at most 0.5 (variance $1/12$). By Parseval every pixel inherits error variance $1/12$ before the final rounding, a standard deviation of $0.289$. Because the true pixel is an integer, the final rounding \emph{removes} the error whenever $|e|<0.5$, and leaves an error of $\pm1$ otherwise. If $e$ is approximately Gaussian, the chance of $|e|>0.5$ is
+\[
+P=\operatorname{erfc}\!\Big(\tfrac{0.5}{\sigma\sqrt2}\Big)\Big|_{\sigma=\sqrt{1/12}}=\pFlip,
+\]
+and since each wrong pixel contributes an error of exactly 1 the predicted MSE equals $P$. (That it lands within 0.1\% of $1/12=0.0833$ is a numerical coincidence.) Measured:
+
+\begin{center}
+\small
+\begin{tabular}{@{}lrrrr@{}}
+\toprule
+image & measured MSE & predicted MSE & max error & pixels $\neq$ original\\ \midrule
+\inputrows{snippets/q100_table}
+\end{tabular}
+\end{center}
+
+The agreement (0.0833 vs.\ 0.0834 on the cameraman) is a nice demonstration that you understand where the error comes from. The astronaut image is lower because 11\% of its pixels are saturated (exactly 0 or 255): a reconstruction that overshoots past the end of the range is clamped back, which hides the error. Measured separately, the MSE is 0.012 on those pixels and 0.084 on all the others, matching the prediction.
+
+\section{Floating-point precision of the transform}
+
+Is \code{double} overkill? We apply forward and inverse DCT to every tile of the cameraman \emph{without quantization} and measure how far we land from the start:
+
+\begin{center}
+\small
+\begin{tabular}{@{}lrr@{}}
+\toprule
+arithmetic & max abs error & rms error\\ \midrule
+\inputrows{snippets/precision_table}
+\end{tabular}
+\end{center}
+
+\begin{itemize}
+\item \textbf{float64} (\code{double}): errors of $10^{-13}$, utterly irrelevant. 
+\item \textbf{float32}: $10^{-4}$ worst case. Still 3 orders of magnitude below the 0.5 that would flip a pixel, so a \code{float} implementation is perfectly adequate for this codec (and is what GPUs prefer).
+\item \textbf{Fixed-point constants} with $b$ fractional bits: the matrix is no longer exactly orthonormal, so forward and inverse do not cancel. About 10 bits are needed to keep the worst case under half a grey level, and 13 bits get below 0.1, which is why libjpeg's accurate integer DCT uses 13-bit constants. \emph{Caveat:} this experiment only rounds the constants; a real integer implementation also rounds intermediate sums, which adds more error.
+\end{itemize}
+
+\section{Rounding ties: why NumPy and C++ disagreed}
+
+\textbf{The surprise.} When I first cross-checked the C++ codec against the NumPy reference, 13 of 16\,384 coefficients differed. All 13 were within $1.5\times10^{-14}$ of an exact $x.5$.
+
+\textbf{Why ties are common.} The DCT basis values at positions $(u,v)\in\{0,4\}^2$ are rational (because $\cos^2(\pi/4)=\tfrac12$), so those 4 coefficients per tile are exact multiples of $1/8$. At quality 100 one in eight of them lands exactly on $x.5$: $\tfrac{4}{64}\cdot\tfrac18=0.78\%$ of all coefficients, matching the measured 0.78\%:
+
+\begin{center}
+\small
+\begin{tabular}{@{}rrrr@{}}
+\toprule
+quality & coefficients & within $10^{-9}$ of a tie & share\\ \midrule
+\inputrows{snippets/ties_table}
+\end{tabular}
+\end{center}
+
+\textbf{The fix.} Round with $\lfloor x+0.5+10^{-9}\rfloor$ in both implementations (the same constant is used in the decoder's final rounding). $10^{-9}$ is about $10^5$ times bigger than the accumulated floating-point noise of an 8-point DCT ($\approx10^{-14}$) and $10^9$ times smaller than the smallest quantization step (1), so it cannot change a real decision, only the tie. After the fix, C++ and NumPy agree on every coefficient, every file byte and every decoded pixel (Chapter~\ref{ch:testing}).
+
+\begin{plain}
+\textbf{Why this is worth knowing for a GPU/library role.} Any time the ``same'' algorithm runs on two platforms (CPU vs GPU, scalar vs SIMD, FMA vs no FMA), summation order changes the last bits, and discrete decisions like ``round'' or ``compare'' can flip. Libraries therefore need either a defined tie-breaking rule or tests that allow $\pm1$ differences. Knowing the difference between ``bit-exact'' and ``numerically equivalent'' is a mark of experience.
+\end{plain}
+
+\begin{sound}
+``I predicted three things analytically and checked them: the coefficient range from Parseval, the quality-100 error from a Gaussian model of coefficient rounding, and the effect of float32 or fixed-point arithmetic on the transform. The most useful finding was that exact rounding ties are common at high quality because four DCT positions are multiples of 1/8, and that floating-point summation order decides them unless the tie-break is made explicit.''
+\end{sound}

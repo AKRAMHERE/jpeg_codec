@@ -1,0 +1,72 @@
+\chapter{How we know it is correct}\label{ch:testing}
+
+\emph{Resume line: ``Developed corresponding decompression routines and validated reconstructed images against original inputs.''}
+
+A compression codec is dangerous to get wrong silently: a bug may still produce a plausible-looking picture. So correctness is checked in four independent layers, each catching different mistakes.
+
+\begin{center}
+\begin{tabular}{@{}p{3.1cm}p{5.5cm}p{6.2cm}@{}}
+\toprule
+\textbf{Layer} & \textbf{What it checks} & \textbf{Catches}\\ \midrule
+1.\ Unit tests (C++, 28 groups, 32\,581 checks) & Each stage in isolation against an independent definition or an exact property. & A wrong table entry, off-by-one in zig-zag, sign error in amplitude bits, broken canonical code.\\
+2.\ Round trips on real and random images & Encode then decode: dimensions, exact entropy-stage losslessness, bounded error at quality 100, monotonic quality. & Mistakes that only appear on odd sizes (1$\times$1, 7$\times$9), flat images, extreme values.\\
+3.\ Independent NumPy model & Same algorithm re-implemented with different code; compare coefficients, \emph{bytes} and pixels. & A mistake shared by the tests and the C++ (same misunderstanding). A second implementation rarely makes the same error.\\
+4.\ libjpeg comparison & Same quality $\Rightarrow$ same PSNR; similar size. & A transform or table that is self-consistent but not the real JPEG algorithm.\\ \bottomrule
+\end{tabular}
+\end{center}
+
+\section{Layer 1: what the unit tests prove}
+
+\begin{longtable}{@{}p{5.3cm}p{9.7cm}@{}}
+\toprule
+\textbf{Test} & \textbf{Property}\\ \midrule\endhead
+\code{dct\_matches\_textbook\_definition} & Fast matrix DCT equals the 4-fold sum on 50 random tiles ($<10^{-10}$).\\
+\code{dct\_inverse\_recovers\_input} & Forward then inverse returns the tile ($<10^{-10}$).\\
+\code{dct\_matrix\_is\_orthonormal} & $CC^{\top}=I$ ($<10^{-12}$).\\
+\code{dct\_preserves\_energy\_parseval} & Sum of squares unchanged by the DCT.\\
+\code{dct\_flat\_block\_\dots} & Flat tile $\Rightarrow$ only DC, equal to 8$\times$ value.\\
+\code{zigzag\_is\_permutation\_\dots} & 0..63 each exactly once; first 16 match JPEG.\\
+\code{quant\_table\_scaling\_rules} & Quality 50 = base table, 100 = all ones, 1 = all 255, monotone in between, clamped input.\\
+\code{quantize\_rounds\_half\_up} & Ties go up; real differences are not swallowed by the $\varepsilon$.\\
+\code{category\_and\_amplitude\_\dots} & Round trip for all values in $[-2047,2047]$.\\
+\code{tokenizer\_emits\_zrl\_and\_eob\_\dots} & A run of 18 zeros becomes ZRL + (run 2).\\
+\code{tokenizer\_omits\_eob\_\dots} & No EOB when coefficient 63 is non-zero.\\
+\code{tokenizer\_dc\_is\_differential} & DC is coded as difference to the previous tile.\\
+\code{huffman\_textbook\_example} & Lengths 1,3,3,3,4,4 as in the textbook.\\
+\code{huffman\_kraft\_\dots} & On random distributions: $\sum2^{-\ell}=1$, prefix-free, $H\le L<H+1$.\\
+\code{huffman\_edge\_cases} & Empty, single, and two-symbol alphabets.\\
+\code{huffman\_length\_limit\_is\_enforced} & 45 Fibonacci frequencies stay $\le32$ bits and still round-trip.\\
+\code{huffman\_table\_serialization\_\dots} & Serialize then deserialize gives identical codes.\\
+\code{bitio\_random\_round\_trip} & 5000 random-width bit fields (0--32 bits).\\
+\code{entropy\_stage\_is\_exactly\_lossless} & Decoded coefficient array equals the encoder's, bit for bit, over 20 image/quality combinations.\\
+\code{round\_trip\_keeps\_dimensions\_\dots} & Nine sizes including 1$\times$1, 1$\times$20, 257$\times$129.\\
+\code{flat\_images\_survive\_exactly\_\dots} & Constant images at quality 100 return exactly.\\
+\code{quality\_100\_error\_is\_tiny\_\dots} & Max error $\le3$, MSE $<0.5$.\\
+\code{quality\_trades\_size\_for\_fidelity\_\dots} & As quality rises, size and PSNR never decrease.\\
+\code{extreme\_dc\_jumps\_round\_trip} & Black/white tile checkerboard (largest DC differences).\\
+\code{fused\_and\_staged\_paths\_\dots} & Fast and profile-friendly code paths are bit-identical.\\
+\code{encoding\_is\_deterministic} & Same input $\Rightarrow$ same bytes.\\
+\code{coefficient\_range\_\dots} & $|{\rm coefficient}|\le1024$.\\
+\code{malformed\_streams\_\dots} & Bad magic and truncations throw; 200 random bit-flips never crash.\\ \bottomrule
+\end{longtable}
+
+\begin{plain}
+\textbf{Property-based thinking.} Many tests do not compare to a stored ``expected output''. They check a \emph{property that must hold for every input} (``decode(encode(x)) has the same size as $x$'', ``code lengths satisfy Kraft equality'') on randomly generated inputs. This finds bugs that hand-picked examples miss, and is the kind of testing used for numerical libraries.
+\end{plain}
+
+\section{Layer 3: the NumPy reference model}
+
+\file{python/jlc\_ref.py} re-implements the codec independently. The transform stages are NumPy one-liners over all tiles at once (\verb|C @ blocks @ C.T|); the entropy stages are plain Python loops. It reads and writes the same \texttt{JLC1} format. \file{python/crosscheck.py} then runs 8 images (the photo, noise, gradient, a synthetic picture, a $37\times53$ image, a $1\times1$ image, a flat image and a black/white block image) at 5 qualities each and verifies four things per case:
+
+\begin{enumerate}
+\item C++-decoded coefficients $=$ NumPy analysis,
+\item C++ file $=$ NumPy file, \textbf{byte for byte},
+\item NumPy decodes the C++ file to the same pixels as the C++ decoder,
+\item C++ decodes the NumPy file to the same pixels.
+\end{enumerate}
+
+Result: \textbf{160 comparisons, 0 mismatches.} A full-size run on the four $512\times512$ images at two qualities is also byte-identical. Getting there exposed the rounding-tie issue of Chapter~\ref{ch:numerics}: the very first run had 15 mismatches. That is precisely what a reference model is for.
+
+\begin{sound}
+``I validated the codec in four layers: unit tests on each stage, round-trip and property tests, an independent NumPy implementation that produces byte-identical files, and a comparison with libjpeg showing identical PSNR at equal quality. The NumPy cross-check found a real numerical issue, rounding ties decided by floating-point summation order, which I fixed with a deterministic tie-break.''
+\end{sound}

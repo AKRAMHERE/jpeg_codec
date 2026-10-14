@@ -1,0 +1,210 @@
+\chapter{Running on bwUniCluster 3.0: step by step}\label{ch:cluster}
+
+bwUniCluster 3.0 is the shared HPC system operated by KIT for universities in Baden-W\"urttemberg, including Freiburg. You use it by logging in to a \emph{login node}, preparing your work there, and handing the real computation to a job scheduler called \textbf{Slurm}, which runs it on a \emph{compute node}.
+
+\begin{plain}
+\textbf{Mental model.} The login node is a shared reception desk: fine for editing files and submitting forms, \emph{not} for computing (heavy computations on login nodes are not allowed). The compute nodes are the workshops. A \emph{job script} is the form you hand in: ``give me 1 core for 30 minutes on an Intel node, then run these commands''. Slurm queues the form and runs it when a node is free.
+\end{plain}
+
+\begin{warn}[Facts and where they come from]
+Queue names, limits and hardware below come from the official bwHPC wiki pages listed at the end of this chapter, which I read while preparing this guide. HPC sites change these things. Before relying on a number, confirm it on the cluster with \code{sinfo -s} (queues), \code{module avail} (software) and the wiki.
+\end{warn}
+
+\section{The workflow in one picture}
+
+\begin{center}
+\begin{tikzpicture}[node distance=0.5cm,
+  b/.style={draw=accent,fill=plainbg,rounded corners=2pt,minimum height=0.9cm,align=center,font=\footnotesize,inner sep=4pt},
+  arr/.style={-{Stealth[length=2mm]},thick}]
+\node[b] (a) {your laptop\\code + plots};
+\node[b,right=1cm of a] (b) {login node\\\texttt{uc3.scc.kit.edu}};
+\node[b,right=1cm of b] (c) {Slurm queue};
+\node[b,right=1cm of c] (d) {compute node\\runs the job};
+\draw[arr] (a) -- node[above,font=\scriptsize]{rsync} (b);
+\draw[arr] (b) -- node[above,font=\scriptsize]{sbatch} (c);
+\draw[arr] (c) -- (d);
+\draw[arr] (d.south) -- ++(0,-0.7) -| node[pos=0.25,below,font=\scriptsize]{CSV files, logs} (b.south);
+\end{tikzpicture}
+\end{center}
+
+\section{One-time setup: account and login}
+
+\begin{enumerate}
+\item \textbf{Registration.} The login documentation lists three prerequisites: complete the 3-step registration procedure, set a \emph{service password} for bwUniCluster 3.0, and set up a \emph{second factor} (a TOTP app on your phone). You enter the one-time code first and then the service password when you log in. Since you already ran jobs on the cluster for project~1, this is probably done; if the login fails, this is the first thing to re-check.
+\item \textbf{Network.} Access is limited to the BelW\"u research network. On the Freiburg campus network you are normally inside it; from home use the university VPN or an SSH jump host. A connection that times out from outside is not a bug in your command.
+\item \textbf{Log in.}
+\begin{lstlisting}[style=shell]
+ssh <your_username>@uc3.scc.kit.edu
+\end{lstlisting}
+Your username is a university prefix plus your local name (for KIT users, for example, \code{ka\_ab1234}); the registration pages show yours. Alternative host names listed on the wiki: \code{bwunicluster.scc.kit.edu}, \code{uc3-login1.scc.kit.edu}, \code{uc3-login2.scc.kit.edu}.
+\end{enumerate}
+
+\section{Where to put files}
+
+\begin{center}
+\small
+\begin{tabular}{@{}p{3.1cm}p{11.5cm}@{}}
+\toprule
+\code{\$HOME} & Permanent, backed up, same on all nodes. Put source code and job scripts here. Our project is a few megabytes, so it lives here.\\
+\textbf{Workspaces} & For large temporary data (restart files, big outputs). Created with \code{ws\_allocate <name> <days>}, found with \code{ws\_find <name>}, listed with \code{ws\_list}, extended with \code{ws\_extend <name> <days>}; they expire. You do not need one for this project unless you benchmark with many gigabytes of images.\\
+\code{\$TMPDIR} & Fast node-local disk, exists only while a job runs. Irrelevant here.\\ \bottomrule
+\end{tabular}
+\end{center}
+
+\section{Step 1: copy the project to the cluster}
+
+From your laptop (in the folder that contains \code{jpeg\_codec/}):
+\begin{lstlisting}[style=shell]
+rsync -av --exclude build --exclude results/sandbox_example jpeg_codec/ <user>@uc3.scc.kit.edu:~/jpeg_codec/
+\end{lstlisting}
+(Or push to a private GitHub repository from your laptop and \code{git clone} on the cluster.) Then on the cluster:
+\begin{lstlisting}[style=shell]
+cd ~/jpeg_codec
+mkdir -p logs results data
+\end{lstlisting}
+The test images are produced by a Python script. If NumPy and scikit-image are not available on the login node, generate \code{data/*.pgm} on your laptop (\code{python3 python/make\_test\_images.py}) and include the \code{data/} folder in the rsync. The C++ benchmark with synthetic images needs no data files at all.
+
+\section{Step 2: look around}
+
+\begin{lstlisting}[style=shell]
+module avail compiler/gnu        # which GNU compiler versions exist
+module spider gnu                # (Lmod) also finds modules with unmet dependencies
+sinfo -s                         # summary of queues (partitions) and node counts
+squeue --me                      # your own jobs
+\end{lstlisting}
+The cluster uses \textbf{Lmod}: \code{module load}, \code{module list}, \code{module purge} and \code{module spider} are the commands you need. The wiki lists GNU compilers \code{compiler/gnu/11.4} and \code{compiler/gnu/14.2} (\code{13.3} is also referenced). The file \file{slurm/env.sh} tries \code{compiler/gnu/14.2} first and falls back to the default \code{compiler/gnu}; edit it if \code{module avail} shows different versions. The project needs C++17 (it uses structured bindings). I built and tested it with GCC 13.3; any recent GCC that supports C++17 should work, but I have not tried older versions, so if the build fails on an old compiler module, load a newer one.
+
+\section{The queues you will use}
+
+\begin{center}
+\small
+{\small\setlength{\tabcolsep}{4pt}\begin{tabular}{@{}lllll@{}}
+\toprule
+\textbf{queue} & \textbf{node type} & \textbf{cores / memory} & \textbf{max wall time} & \textbf{use it for}\\ \midrule
+\code{dev\_cpu} & development queue & as \code{cpu} & 30 min & compile, test, short checks\\
+\code{cpu\_il} & Intel Xeon Platinum 8358 (Ice Lake) & 64 cores, 256\,GiB & 72 h & benchmark\\
+\code{cpu} & AMD EPYC 9454 & 96 cores, 384\,GiB & 72 h & benchmark\\
+\code{highmem} & AMD EPYC 9454 & 96 cores, 2.3\,TiB & 72 h & not needed\\
+\bottomrule
+\end{tabular}}
+\end{center}
+
+\textbf{Development queues} (\code{dev\_} prefix) have a 30-minute limit, allow only \emph{one running job at a time} and at most 3 queued, and are meant for ``developing, compiling and testing code''. The wiki explicitly says not to misuse them for regular short-running production jobs or chained jobs. So: build and test in \code{dev\_cpu}; run the real benchmark in \code{cpu\_il} and \code{cpu}.
+
+\section{Step 3: build and test on a compute node}
+
+\begin{lstlisting}[style=shell]
+sbatch slurm/01_build_test.sbatch
+squeue --me                       # PD = pending, R = running. Check again after a minute or two.
+cat logs/jlc-build_<jobid>.out    # expect: "32581 checks, 0 failures"  and "build + tests OK"
+\end{lstlisting}
+
+\begin{warn}[Be kind to the scheduler]
+The wiki asks you not to run \code{squeue} or other Slurm commands in loops or with \code{watch}, and to leave at least 30 seconds between queries. Submit, wait, check.
+\end{warn}
+
+If you prefer an interactive session (type commands yourself on a compute node), the wiki's example is:
+\begin{lstlisting}[style=shell]
+salloc -p dev_cpu -n 1 -t 20 --mem=4000      # asks for 1 task, 20 minutes, 4000 MB; you land on the node
+module load compiler/gnu && make && make test
+exit                                          # give the node back!
+\end{lstlisting}
+
+\section{Step 4: the benchmark jobs}
+
+\begin{lstlisting}[style=shell]
+bash slurm/submit_all.sh          # submits slurm/02_bench.sbatch to cpu_il and to cpu
+squeue --me
+\end{lstlisting}
+
+What each job does (read \file{slurm/02\_bench.sbatch}; every line is commented):
+\begin{enumerate}
+\item loads the compiler, prints \code{module list} and \code{g++ --version} (it ends up in the log),
+\item writes \file{results/meta\_<partition>.txt}: date, host name, CPU model (\code{lscpu}), cache sizes, compiler. \textbf{Keep these files}: a benchmark number without the machine it ran on is worthless,
+\item runs \code{jlc\_bench} on synthetic images of $512^2,\dots,4096^2$ pixels at quality 10, 50, 90, both \emph{staged} and \emph{fused}, with 7 repetitions each (median reported),
+\item runs it on the real photographs, 15 repetitions,
+\item writes \file{results/bench\_<partition>\_fused0.csv}, \file{...\_fused1.csv}, and one CSV per photograph.
+\end{enumerate}
+
+\subsection{What the \#SBATCH lines mean}
+
+\begin{center}
+\small
+\begin{tabular}{@{}p{4.6cm}p{10cm}@{}}
+\toprule
+\code{--partition=cpu\_il} & Which queue (node type). Overridden by \code{sbatch --partition=cpu ...}.\\
+\code{--nodes=1 --ntasks=1} & One node, one process.\\
+\code{--cpus-per-task=1} & One core: the codec is single-threaded, so one core is the honest request.\\
+\code{--mem=8000mb} & 8000 MB of memory. The largest image uses well under 1\,GB; the default per-core memory on these queues is about 1--2\,GB, so ask explicitly.\\
+\code{--time=00:30:00} & Wall-time limit. The job is killed at the limit, so be generous but not absurd (short jobs are scheduled sooner).\\
+\code{--output=logs/\%x\_\%j.out} & Log file: \code{\%x} = job name, \code{\%j} = job number. \textbf{The directory must already exist} (\code{mkdir -p logs}) or the job fails immediately.\\
+\code{srun --cpu-bind=cores} & Starts the program on the allocated core and pins it there, so it cannot migrate between cores during the measurement.\\ \bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{Benchmark hygiene (what makes a number trustworthy)}
+
+\begin{itemize}
+\item \textbf{Warm-up run discarded}, then several repetitions, \textbf{median} reported (built into \code{jlc\_bench}).
+\item \textbf{Same binary, same input, same settings} on both machines; only the node changes. Compare partitions only with this in mind: different CPUs, different clocks, different caches.
+\item \textbf{The node may be shared.} Other users' jobs can run on the same node and disturb timings (memory bandwidth, shared caches). For the cleanest numbers add \code{--exclusive} to the \code{sbatch} command (you wait longer in the queue and use the whole node for 30 minutes). Alternatively repeat the job at another time and check the medians agree within a few per cent.
+\item \textbf{Report what you measured}: ``median of 7 runs, single core, GCC \dots, \code{-O3}, node type \dots''.
+\item \textbf{Optional extra:} \code{NATIVE=1 sbatch --partition=cpu\_il slurm/02\_bench.sbatch} also rebuilds with \code{-march=native} on the compute node and benchmarks that binary separately. The compiler may then auto-vectorize the DCT loops with AVX2/AVX-512; compare with the portable build. A native binary can crash with ``illegal instruction'' on a different CPU type, so the script names it per partition.
+\end{itemize}
+
+\section{Step 5: profile}
+
+\begin{lstlisting}[style=shell]
+sbatch slurm/03_profile.sbatch       # dev_cpu, ~1 minute
+less results/gprof_flat.txt          # function-level table (top rows = hot spots)
+\end{lstlisting}
+
+\section{Step 6: bring the results home and plot}
+
+On your laptop:
+\begin{lstlisting}[style=shell]
+rsync -av <user>@uc3.scc.kit.edu:~/jpeg_codec/results/ ./cluster_results/
+python3 python/plot_bench.py cluster_results/bench_cpu_il_fused0.csv cluster_results/bench_cpu_fused0.csv --outdir cluster_results
+\end{lstlisting}
+This creates \file{bench\_stages.png} (where the time goes, one bar per machine), \file{bench\_scaling.png} (throughput versus image size) and \file{bench\_summary.md} (all numbers as tables, ready to paste into notes). Fill in the table at the end of Chapter~\ref{ch:perf}.
+
+\section{When something goes wrong}
+
+\begin{center}
+\small
+\begin{tabular}{@{}p{4.4cm}p{10.2cm}@{}}
+\toprule
+\textbf{Symptom} & \textbf{Likely cause and fix}\\ \midrule
+\code{ssh} hangs or is refused & Not in the BelW\"u network: connect to the university VPN. Wrong code order: one-time code first, then service password.\\
+\code{module: command not found} in a script & The script is not run through a login shell. \file{slurm/env.sh} checks for it; check \code{module list} at the top of the log.\\
+Module not found & Version differs: \code{module avail compiler/gnu}, \code{module spider gnu}, then edit \file{slurm/env.sh}.\\
+Job stays \code{PD} (pending) & Normal. \code{squeue --me} shows a reason: \code{Priority}/\code{Resources} = waiting for a free node; for \code{dev\_cpu} you may only have one running job.\\
+Job fails in 1 second, empty log & \code{logs/} directory missing, or a typo in \code{--partition}. Look at \code{scontrol show job <id>} and run \code{sinfo -s}.\\
+\code{Killed} / out-of-memory & Raise \code{--mem}. (4096$^2$ needs well under 1\,GB.)\\
+``Illegal instruction'' & A \code{-march=native} binary was run on a different CPU type; rebuild on the node that runs it.\\
+Numbers differ a lot between runs & Shared node. Use \code{--exclusive}, more repetitions, or compare medians from separate runs.\\
+Tests fail on the cluster but not locally & Should not happen (the results are deterministic). Check \code{g++ --version} and that you rsynced the up-to-date sources; then investigate: it would be a real finding.\\ \bottomrule
+\end{tabular}
+\end{center}
+
+\section{How to describe it truthfully}
+
+After you have run the jobs, a precise sentence you can use in the interview and on the resume is, for example:
+
+\begin{quote}
+``I benchmarked the codec on bwUniCluster 3.0 nodes (Intel Xeon Platinum 8358 and AMD EPYC 9454) with GCC and \code{-O3}, single core, median of 7 runs, and profiled the stages with gprof; \emph{[your measured numbers here]}.''
+\end{quote}
+
+Only claim what the job logs and \file{meta\_*.txt} files show. If something did not run (for example \code{perf} is not installed), say so; it is a normal answer.
+
+\section{Sources}
+
+All retrieved while preparing this guide; re-check them, since clusters change.
+\begin{itemize}\small
+\item Batch queues: \url{https://wiki.bwhpc.de/e/BwUniCluster3.0/Batch_Queues}
+\item Running jobs (\code{sbatch}, \code{salloc}, monitoring): \url{https://wiki.bwhpc.de/e/BwUniCluster3.0/Running_Jobs}
+\item Software modules (Lmod): \url{https://wiki.bwhpc.de/e/BwUniCluster3.0/Software_Modules}
+\item Login, registration, network restriction: \url{https://wiki.bwhpc.de/e/BwUniCluster3.0/Login}
+\item Hardware and file systems: {\small\url{https://wiki.bwhpc.de/e/BwUniCluster3.0/Hardware_and_Architecture}}
+\item Workspaces: \url{https://wiki.bwhpc.de/e/Workspaces}
+\end{itemize}

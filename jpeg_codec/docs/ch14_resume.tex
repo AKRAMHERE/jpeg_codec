@@ -1,0 +1,70 @@
+\chapter{The resume bullets, one by one}\label{ch:resume}
+
+For each bullet: what it means in plain words, how it was done, where to find it, why it was done that way, what evidence you can point to, and the follow-up question to expect.
+
+\section{Bullet 1}
+\textit{``Implemented a compact image compression pipeline using 8x8 DCT, quantization, zig-zag scanning, run-length encoding, and Huffman coding.''}
+
+\begin{description}[leftmargin=2.2cm,style=nextline]
+\item[What] A complete encoder for grayscale images following baseline JPEG's design, with its own file format.
+\item[How] Matrix-form $8\times8$ DCT ($CXC^{\top}$); libjpeg-style quality-scaled luminance quantization table; zig-zag scan generated from anti-diagonals; DC differences plus (run, size) tokens with ZRL and EOB; two canonical Huffman tables built per image.
+\item[Where] \file{src/dct.cpp}, \file{quant.cpp}, \file{zigzag.cpp}, \file{rle.cpp}, \file{huffman.cpp}, \file{codec.cpp} (Chapters 2--7).
+\item[Why these choices] DCT for energy compaction; tile size 8 as in JPEG; per-image Huffman for the smallest files (a second pass is cheap); canonical codes so only lengths are stored.
+\item[Evidence] 28 test groups; byte-identical NumPy model; PSNR equal to libjpeg at equal quality.
+\item[Expect] ``Why not just use libjpeg?'' (Because the goal was to understand and measure each stage; libjpeg was used as the independent reference.)
+\end{description}
+
+\section{Bullet 2}
+\textit{``Developed corresponding decompression routines and validated reconstructed images against original inputs.''}
+
+\begin{description}[leftmargin=2.2cm,style=nextline]
+\item[What] A decoder that is the exact inverse chain, plus checks that its output matches the input within the error that quantization allows.
+\item[How] Parse header and tables, Huffman-decode tiles, dequantize, inverse DCT, level-shift and clamp, crop. Validation is layered: exact losslessness of the entropy stage, bounded error at quality 100, monotone behaviour with quality, round trip on odd sizes, robustness to damaged files.
+\item[Where] \code{decode()} in \file{src/codec.cpp}; \file{tests/test\_main.cpp}; Chapter~\ref{ch:testing}.
+\item[Evidence] \code{entropy\_stage\_is\_exactly\_lossless}, \code{quality\_100\_error\_is\_tiny\_and\_bounded}, the 160-case cross-check.
+\item[Expect] ``What does ``validated'' mean for a lossy codec?'' (You cannot demand equality, so you test properties: exactness where the math is lossless, tight error bounds where it is not, and agreement with an independent implementation.)
+\end{description}
+
+\section{Bullet 3}
+\textit{``Analyzed the rate-distortion trade-off using compression ratio, MSE, and PSNR across quantization levels.''}
+
+\begin{description}[leftmargin=2.2cm,style=nextline]
+\item[What] Swept the quality setting from 1 to 100 on six images and plotted rate against distortion.
+\item[How] \code{jlc sweep} for each image; \file{python/rd\_sweep.py} adds the libjpeg curves, plots, and tables.
+\item[Where] \file{results/rd\_*.csv}, \file{rd\_curves.png}; Chapter~\ref{ch:measure}.
+\item[Key numbers] Cameraman: \camQfiftyRatio:1 and \camQfiftyPSNR\,dB at quality 50 (\camQfiftyBpp\ bpp); 1.8:1 and \camQhundredPSNR\,dB at quality 100; $\sim$130:1 at quality 1. Noise at quality 100 expands the file (ratio \noiseQhundredRatio).
+\item[Expect] ``Why does PSNR plateau/explode at quality 100?'' (Step size 1: only rounding error remains; MSE $\approx0.083$.)
+\end{description}
+
+\section{Bullet 4}
+\textit{``Investigated rounding, coefficient range, and numerical reconstruction errors introduced during compression.''}
+
+\begin{description}[leftmargin=2.2cm,style=nextline]
+\item[What] Predicted and measured where numerical error comes from.
+\item[How] Parseval bound ($|{\rm coef}|\le1024$); uniform-error model $Q^2/12$ against measurement; Gaussian model of the quality-100 error ($P=\pFlip$); float32 and fixed-point precision experiments; analysis of exact rounding ties and the $10^{-9}$ tie-break.
+\item[Where] \file{python/numerics\_study.py}, \file{include/jlc/quant.hpp}; Chapter~\ref{ch:numerics}.
+\item[Expect] ``Is double precision necessary?'' (No: float32 has $10^{-4}$ error against a 0.5 threshold. Ties are the only place where precision matters, and only for reproducibility.)
+\end{description}
+
+\section{Bullet 5}
+\textit{``Benchmarked encoding and decoding performance and profiled computationally intensive stages of the pipeline.''}
+
+\begin{description}[leftmargin=2.2cm,style=nextline]
+\item[What] Per-stage timing, throughput vs.\ image size, hot-spot analysis, and one optimization driven by the profile.
+\item[How] Stage timers inside \code{encode}/\code{decode}; \code{jlc\_bench} (warm-up, median, CSV); gprof; the page-fault experiment; fused execution path.
+\item[Where] \file{apps/jlc\_bench.cpp}, \file{slurm/}, \file{python/plot\_bench.py}; Chapter~\ref{ch:perf}, Chapter~\ref{ch:cluster}.
+\item[Evidence to prepare] \textbf{Your} cluster numbers: Mpixel/s per partition, stage breakdown, fused vs.\ staged.
+\item[Expect] ``What dominates, and what would you do next?'' (DCT on the encoder; Huffman decoding and memory traffic on the decoder; next: SIMD/OpenMP over tiles, table-driven Huffman, restart intervals.)
+\end{description}
+
+\section{Resume wording to consider once your cluster numbers exist}
+
+The current bullets are accurate. If you want denser versions, use only numbers you have measured; bracketed items are yours to fill.
+
+\begin{itemize}
+\item Implemented a baseline-JPEG-style grayscale codec in C++17 (8$\times$8 DCT, libjpeg-scaled quantization, zig-zag, DC DPCM + run-length, per-image canonical Huffman); a NumPy reference model produces byte-identical bitstreams.
+\item Validated against libjpeg: identical PSNR at equal quality and file sizes within about 1\% on natural images; 28 unit-test groups (32\,000+ checks) including random, odd-size and corrupted inputs.
+\item Characterized rate--distortion from 130:1 (quality 1) to 1.8:1 (quality 100); predicted the quality-100 reconstruction error analytically (MSE 0.083 predicted, 0.083 measured).
+\item Found and fixed a cross-implementation divergence caused by floating-point rounding ties (four DCT positions are exact multiples of $1/8$); added a deterministic tie-break.
+\item Profiled on bwUniCluster [Xeon Platinum 8358 / EPYC 9454]: [stage] dominates at [X]\%; fusing dequantization and IDCT per tile removed a 32\,MiB temporary and cut decode time by [Y]\% with bit-identical output.
+\end{itemize}

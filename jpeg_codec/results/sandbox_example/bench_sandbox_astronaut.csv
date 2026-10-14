@@ -1,0 +1,4 @@
+image,width,height,quality,bytes,bpp,psnr,enc_total_ms,enc_dct_ms,enc_quant_zigzag_ms,enc_scan_ms,enc_huff_build_ms,enc_bitpack_ms,dec_total_ms,dec_bitdecode_ms,dec_dequant_ms,dec_idct_ms,dec_crop_ms,enc_mpix_s,dec_mpix_s
+data/astronaut.pgm,512,512,10,8498,0.25934,28.956,3.0422,1.5594,0.8331,0.4175,0.0144,0.1767,2.2376,0.5094,0.2876,1.3874,0.0195,86.168,117.154
+data/astronaut.pgm,512,512,50,23730,0.72418,34.746,3.5277,1.5360,0.8240,0.7144,0.0185,0.3916,3.0248,1.2991,0.2992,1.3832,0.0193,74.311,86.664
+data/astronaut.pgm,512,512,90,56954,1.73810,41.821,4.5490,1.5365,0.8270,1.2904,0.0227,0.8518,4.5703,2.9034,0.2720,1.3636,0.0192,57.627,57.358

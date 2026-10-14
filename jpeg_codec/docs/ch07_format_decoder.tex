@@ -1,0 +1,51 @@
+\chapter{The file format and the decoder}\label{ch:format}
+
+\section{The \texttt{JLC1} file format}
+
+\begin{center}
+\begin{tikzpicture}[x=1cm,y=1cm,font=\footnotesize,
+  fld/.style={draw=accent,fill=plainbg,minimum height=0.9cm,align=center,inner sep=2pt}]
+\node[fld,minimum width=1.5cm] (a) at (0.75,0) {magic\\\texttt{JLC1}};
+\node[fld,minimum width=1.5cm,right=0pt of a] (b) {width\\u32};
+\node[fld,minimum width=1.5cm,right=0pt of b] (c) {height\\u32};
+\node[fld,minimum width=1.2cm,right=0pt of c] (d) {quality\\u8};
+\node[fld,minimum width=3cm,right=0pt of d,fill=warnbg,draw=warnfg] (e) {DC Huffman table\\32 + $n_{DC}$ bytes};
+\node[fld,minimum width=3cm,right=0pt of e,fill=warnbg,draw=warnfg] (f) {AC Huffman table\\32 + $n_{AC}$ bytes};
+\node[fld,minimum width=3.2cm,right=0pt of f,fill=soundbg,draw=soundfg] (g) {entropy-coded blocks\\(bit stream, zero-padded)};
+\end{tikzpicture}
+\end{center}
+
+All integers are little-endian. The payload contains the tiles in raster order (left to right, top to bottom). Each tile is: DC Huffman code, DC amplitude bits, then AC (code, amplitude) pairs until an EOB or the 63rd coefficient. There are no markers or byte stuffing (the real JPEG inserts \texttt{0x00} after every \texttt{0xFF} byte in the payload so that markers are recognizable; we have no markers, so we skip that).
+
+\begin{plain}
+\textbf{Header overhead.} 13 bytes of header plus the two Huffman tables: 134 bytes in total for the $512\times512$ cameraman at quality 50, i.e.\ 0.6\% of the file. For a small, flat image it matters: a mostly smooth, bright $128\times128$ corner crop of the cameraman at quality 50 is 218 bytes, of which 98 (45\%) are header and tables. This is one reason a near-constant image can come out smaller than libjpeg's output, which has its own, larger, fixed overhead (Chapter~\ref{ch:measure}).
+\end{plain}
+
+\section{The encoder, end to end}
+
+\lstinputlisting{snippets/code_encode_main.cpp}
+
+\begin{plain}
+\textbf{Why two passes?} The Huffman tables depend on the symbol statistics of the \emph{whole} image, so the encoder first generates all tokens and counts them (stage 3), builds the tables (stage 4), and only then writes bits (stage 5). The token list lives in memory in between. That is the price of a per-image optimal code; a decoder-friendly alternative is fixed standard tables (slightly bigger files, but one pass).
+\end{plain}
+
+\section{The decoder: run it backwards}
+
+\begin{enumerate}
+\item Check the magic number, read width, height, quality. Reject impossible dimensions (so a corrupted header cannot make the program allocate terabytes).
+\item Read the two Huffman tables.
+\item For each tile: read the DC symbol, then \code{size} amplitude bits, and add to the running DC. Then loop reading AC symbols: EOB stops the tile, ZRL skips 16 positions, otherwise skip \code{run} positions and place the decoded value. Any run that would overflow position 63 is treated as an error.
+\item De-zig-zag each tile and multiply by the step sizes of the stored quality (this is the approximation to the original DCT coefficients).
+\item Inverse DCT, add 128, round to an integer, clamp into $[0,255]$.
+\item Crop the padding.
+\end{enumerate}
+
+\lstinputlisting{snippets/code_decode_blocks.cpp}
+
+\subsection{Malformed input}
+
+A decoder is a parser of untrusted data, so it must never crash or loop forever. The decoder throws an exception on a wrong magic number, truncated headers/tables/payload, invalid Huffman codes, and runs that overflow a tile. The test \code{malformed\_streams\_are\_rejected\_not\_crashed} truncates a valid file at six places (each must throw) and flips random bits 200 times (the decoder may succeed with a damaged image or throw, but must never crash).
+
+\section{Using the library from your own code}
+
+\lstinputlisting{snippets/code_api_example.cpp}

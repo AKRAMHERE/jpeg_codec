@@ -1,0 +1,4 @@
+image,width,height,quality,bytes,bpp,psnr,enc_total_ms,enc_dct_ms,enc_quant_zigzag_ms,enc_scan_ms,enc_huff_build_ms,enc_bitpack_ms,dec_total_ms,dec_bitdecode_ms,dec_dequant_ms,dec_idct_ms,dec_crop_ms,enc_mpix_s,dec_mpix_s
+data/texture.pgm,512,512,10,6220,0.18982,32.346,2.8479,1.5394,0.8270,0.3222,0.0101,0.1231,1.9718,0.3214,0.2839,1.3235,0.0187,92.049,132.948
+data/texture.pgm,512,512,50,15918,0.48578,38.991,3.2208,1.5425,0.8317,0.5256,0.0174,0.2852,2.5094,0.8557,0.2929,1.3230,0.0191,81.390,104.465
+data/texture.pgm,512,512,90,40693,1.24185,45.352,4.0490,1.5266,0.8404,1.0107,0.0217,0.6437,3.7393,2.1162,0.2723,1.3338,0.0170,64.743,70.105

@@ -1,0 +1,48 @@
+\chapter{Step 0: pixels, tiles, and a shift}
+
+\section{Pixels and why raw images are big}
+
+A grayscale image is a grid of numbers from 0 (black) to 255 (white). One number needs 8 bits, so a $512\times512$ image takes $512\cdot512 = 262{,}144$ bytes uncompressed. The PGM file format used by the project is nothing more than a tiny text header followed by exactly these bytes.
+
+\begin{plain}
+\textbf{Bits per pixel (bpp)} is the number we will use all through the guide: ``how many bits does the file spend on each pixel on average?'' Raw is 8~bpp. The compressed cameraman at quality~50 costs about \camQfiftyBpp\ bpp.
+\end{plain}
+
+\section{Why tiles?}
+
+The next step (the DCT) asks ``which smooth or wiggly patterns is this piece of picture made of?'' If we asked that for the whole picture at once, one fine detail in a corner would change \emph{every} number. By cutting the picture into small independent tiles of $8\times 8$ pixels, three things happen:
+
+\begin{itemize}
+\item \textbf{Local adaptation.} A flat sky tile needs almost no numbers; a tile containing an edge needs more. Each tile pays for what it contains.
+\item \textbf{Cheap maths.} An $8\times8$ transform is tiny (1024 multiply-adds, Chapter~\ref{ch:dct}), fits in registers/L1 cache, and all tiles can be processed independently, which is why JPEG parallelizes so nicely on GPUs.
+\item \textbf{A price: blocking.} Tiles are compressed independently, so at very low quality their borders disagree and you see the grid (right side of the gallery figure). 8 is a historic compromise between ``bigger tiles compress better'' and ``bigger tiles cost more and blur edges''.
+\end{itemize}
+
+\section{Padding when the size is not a multiple of 8}
+
+A $37\times53$ image does not divide into $8\times8$ tiles. The codec pads the image on the right and bottom by \emph{repeating the last column and row}. It stores the true width and height in the file header, and the decoder crops the padding away.
+
+\begin{plain}
+Why repeat edge pixels instead of padding with zeros? Zeros would create an artificial sharp edge (a bright picture suddenly dropping to black) in the border tiles. Sharp edges need many DCT coefficients, so zero padding would waste bits. Repeating the edge keeps the border tile smooth.
+\end{plain}
+
+In the code this is two \code{std::min} calls inside \code{gatherBlock} in \file{src/codec.cpp}: the pixel read is clamped to the last valid row and column.
+
+\section{The level shift: subtract 128}
+
+Pixel values $0\ldots255$ are all positive, centred around 128. The DCT's first output (the ``DC'' coefficient, the tile's average brightness) would then always be large and positive. Subtracting 128 first moves values into $[-128,127]$, centred on zero.
+
+\begin{itemize}
+\item It does not change the information; the decoder simply adds 128 back.
+\item It keeps the DC coefficient small and symmetric, which makes it cheaper to code, and it gives us a clean bound used later: $|{\rm coefficient}|\le 1024$ (Chapter~\ref{ch:numerics}).
+\end{itemize}
+
+\section{The numbers we will follow through the whole guide}
+
+To make the next chapters concrete, we follow \emph{one real tile} of the cameraman image through every stage: tile column \exBlockX, tile row \exBlockY. (It was chosen by a script because it contains a bit of texture, not just flat sky.)
+
+\[
+\underbrace{\input{snippets/ex_pixels}}_{\text{original pixels } 0\ldots255}
+\quad\xrightarrow{\;-128\;}\quad
+\underbrace{\input{snippets/ex_shifted}}_{\text{level-shifted}}
+\]

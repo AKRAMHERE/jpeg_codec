@@ -1,0 +1,5 @@
+configuration,encode_ms,decode_ms,dequantize_stage_ms
+"staged, default malloc",69.6118,58.818,23.097
+"staged, mmap disabled",51.9038,41.9334,8.864
+"fused, default malloc",47.7278,37.7186,0.0
+"fused, mmap disabled",48.9528,38.0724,0.0
