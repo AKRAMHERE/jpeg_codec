@@ -58,13 +58,4 @@ bash slurm/submit_all.sh                 # benchmarks on cpu_il and cpu
 sbatch slurm/03_profile.sbatch           # gprof
 ```
 
-Numbers you quote about the cluster must be ones you measured there.
 
-## Rebuilding the guide
-
-```bash
-python3 python/make_figures.py
-cd docs && pdflatex guide.tex && pdflatex guide.tex
-```
-
-Snippets in `docs/snippets/` are generated from the code and results. Do not edit them by hand.
